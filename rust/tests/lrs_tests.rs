@@ -41,7 +41,10 @@ fn repeated_substring_across_directory_hierarchy() {
         "test-data/project/lib/gamma.txt",
         "test-data/project/lib/delta.txt",
     ];
-    let contents: Vec<String> = files.iter().map(|f| fs::read_to_string(f).unwrap()).collect();
+    let contents: Vec<String> = files
+        .iter()
+        .map(|f| fs::read_to_string(f).unwrap())
+        .collect();
     let combined = contents.join("\0") + "\0";
     let tree = lrs::suffix_tree::build_suffix_tree(&combined);
     let results = lrs::search::find_top_repeated(3, 2, &tree);

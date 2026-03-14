@@ -1,6 +1,6 @@
 use clap::Parser;
-use lrs::search::{find_top_repeated, RepeatedSubstring};
-use lrs::suffix_tree::{build_suffix_tree, load_suffix_tree, save_suffix_tree};
+use lrs::search::{RepeatedSubstring, find_top_repeated};
+use lrs::suffix_tree::{build_suffix_tree, hash_content, load_cache};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -43,28 +43,20 @@ fn main() {
         process::exit(1);
     }
 
+    let combined = read_and_combine(&files);
+
     let tree = match &opts.cache {
-        Some(cache_path) if cache_path.exists() => {
-            println!("Loading cached suffix tree from {}", cache_path.display());
-            match load_suffix_tree(cache_path) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("Error loading cache: {e}");
-                    process::exit(1);
-                }
+        Some(cache_path) if cache_path.exists() => match load_cache(cache_path, &combined) {
+            Some(t) => {
+                println!("Loading cached suffix tree from {}", cache_path.display());
+                t
             }
-        }
-        cache_opt => {
-            let t = build_from_files(&files);
-            if let Some(cache_path) = cache_opt {
-                if let Err(e) = save_suffix_tree(cache_path, &t) {
-                    eprintln!("Warning: failed to save cache: {e}");
-                } else {
-                    println!("Saved suffix tree cache to {}", cache_path.display());
-                }
+            None => {
+                println!("Cache stale or corrupt, rebuilding...");
+                build_and_cache(&combined, Some(cache_path))
             }
-            t
-        }
+        },
+        cache_opt => build_and_cache(&combined, cache_opt.as_deref()),
     };
 
     let results = find_top_repeated(opts.top_n, opts.min_length, &tree);
@@ -79,7 +71,7 @@ fn main() {
     }
 }
 
-fn build_from_files(files: &[PathBuf]) -> lrs::suffix_tree::SuffixTree {
+fn read_and_combine(files: &[PathBuf]) -> String {
     let mut parts: Vec<String> = Vec::new();
     for f in files {
         match fs::read_to_string(f) {
@@ -89,9 +81,20 @@ fn build_from_files(files: &[PathBuf]) -> lrs::suffix_tree::SuffixTree {
             }
         }
     }
-    let combined = parts.join("\0");
-    let combined = combined + "\0";
-    build_suffix_tree(&combined)
+    parts.join("\0") + "\0"
+}
+
+fn build_and_cache(combined: &str, cache_path: Option<&Path>) -> lrs::suffix_tree::SuffixTree {
+    let content_hash = hash_content(combined);
+    let tree = build_suffix_tree(combined);
+    if let Some(path) = cache_path {
+        if let Err(e) = lrs::suffix_tree::save_cache_from_tree(path, content_hash, &tree.tree) {
+            eprintln!("Warning: failed to save cache: {e}");
+        } else {
+            println!("Saved suffix tree cache to {}", path.display());
+        }
+    }
+    tree
 }
 
 fn print_results(results: &[RepeatedSubstring]) {
@@ -135,12 +138,13 @@ fn resolve_files(recursive: bool, paths: &[PathBuf]) -> Vec<PathBuf> {
             if recursive {
                 get_files_recursive(p, &mut files);
             } else if let Ok(entries) = fs::read_dir(p) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_file() {
-                        files.push(path);
-                    }
-                }
+                let mut dir_files: Vec<PathBuf> = entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_file())
+                    .collect();
+                dir_files.sort();
+                files.append(&mut dir_files);
             }
         } else {
             eprintln!(
@@ -153,9 +157,13 @@ fn resolve_files(recursive: bool, paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn get_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
-    for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
-        if entry.file_type().is_file() {
-            files.push(entry.into_path());
-        }
-    }
+    let mut found: Vec<PathBuf> = WalkDir::new(dir)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.into_path())
+        .collect();
+    found.sort();
+    files.append(&mut found);
 }

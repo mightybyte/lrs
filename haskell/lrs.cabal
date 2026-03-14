@@ -26,6 +26,7 @@ library
     array,
     binary,
     bytestring,
+    cryptohash-sha256,
     text,
     containers,
     directory,

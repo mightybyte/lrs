@@ -1,6 +1,7 @@
 module AppMain (appMain) where
 
 import Control.Monad (filterM, forM, when)
+import Data.List (sort)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Options.Applicative
@@ -9,7 +10,7 @@ import System.Exit (exitFailure)
 import System.FilePath ((</>))
 
 import LRS.Search (RepeatedSubstring(..), findTopRepeated)
-import LRS.SuffixTree (SuffixTree, buildSuffixTree, loadSuffixTree, saveSuffixTree)
+import LRS.SuffixTree (SuffixTree(..), buildSuffixTree, hashContent, loadCache, saveCache)
 
 data Opts = Opts
   { _opts_topN      :: Int
@@ -54,19 +55,23 @@ appMain = do
     putStrLn "Error: no files found"
     exitFailure
 
+  combined <- readAndCombine files
+
   tree <- case _opts_cache opts of
     Just cachePath -> do
       cacheExists <- doesFileExist cachePath
       if cacheExists
         then do
-          putStrLn $ "Loading cached suffix tree from " ++ cachePath
-          loadSuffixTree cachePath
-        else do
-          t <- buildFromFiles files
-          saveSuffixTree cachePath t
-          putStrLn $ "Saved suffix tree cache to " ++ cachePath
-          return t
-    Nothing -> buildFromFiles files
+          mCached <- loadCache cachePath combined
+          case mCached of
+            Just t -> do
+              putStrLn $ "Loading cached suffix tree from " ++ cachePath
+              return t
+            Nothing -> do
+              putStrLn "Cache stale or corrupt, rebuilding..."
+              buildAndCache combined cachePath
+        else buildAndCache combined cachePath
+    Nothing -> return $! buildSuffixTree combined
 
   let results = findTopRepeated (_opts_topN opts) (_opts_minLength opts) tree
 
@@ -77,11 +82,18 @@ appMain = do
     then putStrLn "No repeated substrings found."
     else printResults results
 
-buildFromFiles :: [FilePath] -> IO SuffixTree
-buildFromFiles files = do
+readAndCombine :: [FilePath] -> IO T.Text
+readAndCombine files = do
   contents <- forM files $ \f -> TIO.readFile f
-  let combined = T.intercalate (T.singleton '\0') contents <> T.singleton '\0'
-  return $! buildSuffixTree combined
+  return $ T.intercalate (T.singleton '\0') contents <> T.singleton '\0'
+
+buildAndCache :: T.Text -> FilePath -> IO SuffixTree
+buildAndCache combined cachePath = do
+  let contentHash = hashContent combined
+      !t@(SuffixTree _ stree) = buildSuffixTree combined
+  saveCache cachePath contentHash stree
+  putStrLn $ "Saved suffix tree cache to " ++ cachePath
+  return t
 
 printResults :: [RepeatedSubstring] -> IO ()
 printResults results = do
@@ -119,7 +131,7 @@ resolveFiles recursive paths = fmap concat $ forM paths $ \p -> do
   else if isDir then
     if recursive then getFilesRecursive p
     else do
-      entries <- listDirectory p
+      entries <- sort <$> listDirectory p
       filterM doesFileExist (map (p </>) entries)
   else do
     putStrLn $ "Warning: " ++ p ++ " is not a file or directory, skipping"
@@ -127,9 +139,9 @@ resolveFiles recursive paths = fmap concat $ forM paths $ \p -> do
 
 getFilesRecursive :: FilePath -> IO [FilePath]
 getFilesRecursive dir = do
-  entries <- listDirectory dir
+  entries <- sort <$> listDirectory dir
   let paths = map (dir </>) entries
   files <- filterM doesFileExist paths
   dirs  <- filterM doesDirectoryExist paths
   subFiles <- fmap concat $ forM dirs getFilesRecursive
-  return (files ++ subFiles)
+  return (sort (files ++ subFiles))

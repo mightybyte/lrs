@@ -3,14 +3,18 @@ module LRS.SuffixTree
   , STree(..)
   , SEdge(..)
   , buildSuffixTree
-  , loadSuffixTree
-  , saveSuffixTree
+  , hashContent
+  , loadCache
+  , saveCache
   ) where
 
+import Control.Exception (SomeException, try)
 import Data.Array.Unboxed (UArray, listArray, (!))
 import Data.Binary (Binary(..), putWord8, getWord8)
 import qualified Data.Binary as Binary
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
+import qualified Crypto.Hash.SHA256 as SHA256
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
@@ -39,12 +43,16 @@ data SEdge = SEdge
   , _se_child :: !STree
   } deriving (Show)
 
-instance Binary SuffixTree where
-  put (SuffixTree txt tree) = put (TE.encodeUtf8 txt) >> put tree
-  get = do
-    bs <- get
-    tree <- get
-    return (SuffixTree (TE.decodeUtf8 bs) tree)
+-- | On-disk cache format: content hash + tree structure only (no text).
+-- The text is reconstructed from the original files at load time.
+data TreeCache = TreeCache
+  { _tc_hash :: !BS.ByteString   -- ^ SHA-256 of the combined text
+  , _tc_tree :: !STree
+  }
+
+instance Binary TreeCache where
+  put (TreeCache h tree) = put h >> put tree
+  get = TreeCache <$> get <*> get
 
 instance Binary STree where
   put (Leaf i) = putWord8 0 >> put i
@@ -60,13 +68,29 @@ instance Binary SEdge where
   put (SEdge s l child) = put s >> put l >> put child
   get = SEdge <$> get <*> get <*> get
 
--- | Load a suffix tree from a binary cache file.
-loadSuffixTree :: FilePath -> IO SuffixTree
-loadSuffixTree = Binary.decodeFile
+-- | Compute a SHA-256 hash of the combined text.
+hashContent :: Text -> BS.ByteString
+hashContent = SHA256.hash . TE.encodeUtf8
 
--- | Save a suffix tree to a binary cache file.
-saveSuffixTree :: FilePath -> SuffixTree -> IO ()
-saveSuffixTree path st = BL.writeFile path (Binary.encode st)
+-- | Try to load a cached tree, validating it against the given combined text.
+-- Returns 'Nothing' if the cache doesn't exist, is corrupt, or the hash
+-- doesn't match (i.e. source files changed).
+loadCache :: FilePath -> Text -> IO (Maybe SuffixTree)
+loadCache path combinedText = do
+  result <- try (Binary.decodeFile path) :: IO (Either SomeException TreeCache)
+  case result of
+    Left _  -> return Nothing
+    Right (TreeCache cachedHash tree) ->
+      let currentHash = hashContent combinedText
+          txt' = combinedText <> T.singleton '\0'
+      in if cachedHash == currentHash
+         then return (Just (SuffixTree txt' tree))
+         else return Nothing
+
+-- | Save just the tree structure and a content hash to the cache file.
+saveCache :: FilePath -> BS.ByteString -> STree -> IO ()
+saveCache path contentHash tree =
+  BL.writeFile path (Binary.encode (TreeCache contentHash tree))
 
 -- | Build a suffix tree from text using naive O(n^2) construction.
 -- A sentinel character (\\0) is appended to ensure all suffixes are unique.

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
@@ -7,7 +8,7 @@ use std::path::Path;
 /// A suffix tree paired with the original text it was built from.
 /// Edge labels are stored as (start, length) indices into the text,
 /// so the tree is O(n) in size rather than O(n²).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct SuffixTree {
     pub text: Vec<char>,
     pub tree: STree,
@@ -31,16 +32,57 @@ pub struct SEdge {
     pub child: STree,
 }
 
-/// Load a suffix tree from a binary cache file.
-pub fn load_suffix_tree(path: &Path) -> io::Result<SuffixTree> {
-    let data = fs::read(path)?;
-    bincode::deserialize(&data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+/// On-disk cache format: content hash + tree structure only (no text).
+/// The text is reconstructed from the original files at load time.
+#[derive(Deserialize)]
+struct TreeCache {
+    content_hash: [u8; 32],
+    tree: STree,
 }
 
-/// Save a suffix tree to a binary cache file.
-pub fn save_suffix_tree(path: &Path, st: &SuffixTree) -> io::Result<()> {
+/// Borrowing version for serialization (avoids cloning the tree to save).
+#[derive(Serialize)]
+struct TreeCacheRef<'a> {
+    content_hash: &'a [u8; 32],
+    tree: &'a STree,
+}
+
+/// Compute a SHA-256 hash of the concatenated text.
+pub fn hash_content(text: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    hasher.finalize().into()
+}
+
+/// Try to load a cached tree, validating it against the given text.
+/// Returns `None` if the cache doesn't exist, is corrupt, or the hash
+/// doesn't match (i.e. source files changed).
+pub fn load_cache(path: &Path, combined_text: &str) -> Option<SuffixTree> {
+    let data = fs::read(path).ok()?;
+    let cache: TreeCache = bincode::deserialize(&data).ok()?;
+    let current_hash = hash_content(combined_text);
+    if cache.content_hash != current_hash {
+        return None;
+    }
+    let text: Vec<char> = combined_text.chars().collect();
+    // The cached tree was built with a trailing '\0' sentinel appended to
+    // combined_text, so reconstruct the same text vector.
+    let mut text_with_sentinel = text;
+    text_with_sentinel.push('\0');
+    Some(SuffixTree {
+        text: text_with_sentinel,
+        tree: cache.tree,
+    })
+}
+
+/// Save just the tree structure and a content hash to the cache file.
+pub fn save_cache_from_tree(path: &Path, content_hash: [u8; 32], tree: &STree) -> io::Result<()> {
+    let cache = TreeCacheRef {
+        content_hash: &content_hash,
+        tree,
+    };
     let data =
-        bincode::serialize(st).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        bincode::serialize(&cache).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     fs::write(path, data)
 }
 
@@ -58,7 +100,13 @@ pub fn build_suffix_tree(txt: &str) -> SuffixTree {
 }
 
 fn insert_suffix(chars: &[char], total_len: usize, suffix_start: usize, tree: STree) -> STree {
-    go(chars, suffix_start, total_len - suffix_start, suffix_start, tree)
+    go(
+        chars,
+        suffix_start,
+        total_len - suffix_start,
+        suffix_start,
+        tree,
+    )
 }
 
 fn go(chars: &[char], pos: usize, rem_len: usize, suffix_start: usize, tree: STree) -> STree {
@@ -145,13 +193,7 @@ fn go(chars: &[char], pos: usize, rem_len: usize, suffix_start: usize, tree: STr
     }
 }
 
-fn common_prefix_len(
-    chars: &[char],
-    pos1: usize,
-    len1: usize,
-    pos2: usize,
-    len2: usize,
-) -> usize {
+fn common_prefix_len(chars: &[char], pos1: usize, len1: usize, pos2: usize, len2: usize) -> usize {
     let max_len = len1.min(len2);
     let mut n = 0;
     while n < max_len && chars[pos1 + n] == chars[pos2 + n] {
