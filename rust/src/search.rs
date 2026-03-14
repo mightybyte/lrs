@@ -31,16 +31,40 @@ pub fn find_top_repeated(top_n: usize, min_len: usize, sa: &SuffixArray) -> Vec<
 
     let mut candidates = collect_lcp_intervals(&sa.sa, &sa.lcp, min_len);
 
+    // Precompute distance to next sentinel for O(1) sentinel checks.
+    // dist_to_sentinel[i] = number of chars from position i until the next '\0'.
+    let dist_to_sentinel = {
+        let text = &sa.text;
+        let mut dist = vec![0usize; text.len()];
+        let mut d = 0usize;
+        for i in (0..text.len()).rev() {
+            if text[i] == '\0' {
+                d = 0;
+            }
+            dist[i] = d;
+            d += 1;
+        }
+        dist
+    };
+
+    // Filter out candidates whose representative suffix crosses a sentinel,
+    // before sorting/truncation so valid candidates aren't crowded out.
+    candidates.retain(|c| {
+        let pos = sa.sa[c.start_rank];
+        dist_to_sentinel[pos] >= c.depth
+    });
+
     // Sort by depth descending
-    candidates.sort_by(|a, b| b.depth.cmp(&a.depth));
+    candidates.sort_unstable_by(|a, b| b.depth.cmp(&a.depth));
 
-    // Pre-dedup at the candidate level using suffix positions (no string
-    // allocation). A candidate is dominated if an already-accepted candidate
-    // has greater depth, at least as many occurrences, and its text region
-    // covers the current candidate's representative suffix position.
-    candidates = prededup_candidates(&sa.sa, candidates);
+    // Collapse "towers": a repeated block of length L generates candidates
+    // at depths L, L-1, L-2, ... all from the same suffix position. Keep
+    // only the longest per (position, count) pair so these towers don't
+    // crowd out independent shorter patterns.
+    candidates = collapse_towers(&sa.sa, candidates);
 
-    candidates.truncate(top_n * 4);
+    // We only need top_n results, so limit candidates before dedup.
+    candidates.truncate(top_n * 50);
 
     // Materialise
     let mut results: Vec<RepeatedSubstring> = candidates
@@ -54,7 +78,6 @@ pub fn find_top_repeated(top_n: usize, min_len: usize, sa: &SuffixArray) -> Vec<
                 substring,
             }
         })
-        .filter(|rs| !rs.substring.contains('\0'))
         .collect();
 
     // Sort by length descending
@@ -65,34 +88,22 @@ pub fn find_top_repeated(top_n: usize, min_len: usize, sa: &SuffixArray) -> Vec<
     results.into_iter().take(top_n).collect()
 }
 
-/// Pre-dedup candidates using suffix positions to collapse "towers" of
-/// near-identical candidates from the same repeated block.
-///
-/// A repeated block of length L generates ~L candidates at depths L, L-1, ...
-/// all from overlapping text regions. We detect this cheaply: a candidate is
-/// dominated if an already-accepted candidate has a greater depth, at least as
-/// many occurrences, and its text region covers the current candidate's
-/// representative suffix position.
-///
-/// Input must be sorted by depth descending.
-fn prededup_candidates(sa: &[usize], candidates: Vec<Candidate>) -> Vec<Candidate> {
-    // Accepted entries: (text_position, depth, count)
-    let mut accepted: Vec<(usize, usize, usize)> = Vec::new();
-    let mut result = Vec::new();
-
-    for c in candidates {
-        let pos = sa[c.start_rank];
-        let dominated = accepted.iter().any(|&(a_pos, a_depth, a_count)| {
-            // Current candidate's suffix starts inside the accepted candidate's
-            // text region, and accepted has >= count.
-            pos >= a_pos && pos < a_pos + a_depth && c.count <= a_count
-        });
-        if !dominated {
-            accepted.push((pos, c.depth, c.count));
-            result.push(c);
-        }
-    }
-    result
+/// Collapse towers of candidates from the same repeated block.
+/// A block of length L generates candidates at depths L, L-1, ..., where
+/// each step shifts the representative suffix position right by 1 while
+/// reducing depth by 1, keeping the end position (pos + depth) constant.
+/// Keying on (end_position, count) collapses these towers in O(n).
+/// Since input is sorted by depth descending, the first candidate seen
+/// for each key is the longest.
+fn collapse_towers(sa: &[usize], candidates: Vec<Candidate>) -> Vec<Candidate> {
+    let mut seen = std::collections::HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|c| {
+            let pos = sa[c.start_rank];
+            seen.insert((pos + c.depth, c.count))
+        })
+        .collect()
 }
 
 /// Stack-based O(n) enumeration of all LCP intervals.
