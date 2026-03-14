@@ -131,6 +131,20 @@ else
 fi
 
 # ============================================================
+echo "=== Test 9: Overlapping patterns not incorrectly dominated ==="
+# A shorter repeated pattern that starts within a longer pattern's text
+# region but extends past it is NOT a substring of the longer pattern.
+# It must survive dedup as an independent result.
+OUTPUT=$("$LRS" "$DATA/overlap.txt" -n 5 2>&1)
+check_output "finds long pattern" '68 +2 +.*AAAAAAAAAAAAAAA'
+# The 46-char pattern "CCCCCCCCC_..._FFFFFFFFF" overlaps with the 68-char
+# pattern in text position but extends past it. It must not be suppressed.
+check_output "overlapping shorter pattern survives" '4[56] +2 +.*CCCCCCCCC.*FFFFFFFFF'
+# "CCCCCCCCC_DDDDDDDDDDDDDDD_EEEEEEEEE_" appears 3 times (higher count
+# than the 68-char pattern) and must also survive as an independent result.
+check_output "higher-count overlap pattern survives" '3[0-9] +3 +.*CCCCCCCCC.*EEEEEEEEE'
+
+# ============================================================
 echo ""
 echo "Results: $PASSED passed, $FAILED failed"
 if [ "$FAILED" -gt 0 ]; then
