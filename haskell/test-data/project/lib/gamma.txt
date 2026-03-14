@@ -1,0 +1,2 @@
+The quick brown fox jumped over the lazy dog near the riverbank.
+This file shares a long line with alpha.txt across the directory tree.

@@ -1,0 +1,56 @@
+cabal-version:      3.0
+name:               lrs
+version:            0.1.0.0
+synopsis:           Find longest repeated substrings using suffix trees
+license:            NONE
+author:             EquiTek
+build-type:         Simple
+
+common shared
+  default-language: Haskell2010
+  ghc-options:      -Wall -Werror -O2
+  default-extensions:
+    BangPatterns
+    OverloadedStrings
+    ScopedTypeVariables
+
+library
+  import:           shared
+  hs-source-dirs:   src
+  exposed-modules:
+    AppMain
+    LRS.SuffixTree
+    LRS.Search
+  build-depends:
+    base >= 4.20,
+    array,
+    binary,
+    bytestring,
+    text,
+    containers,
+    directory,
+    filepath,
+    optparse-applicative
+
+executable lrs
+  import:           shared
+  hs-source-dirs:   exe
+  main-is:          Main.hs
+  ghc-options:      -threaded -rtsopts
+  build-depends:
+    base >= 4.20,
+    lrs
+
+test-suite tests
+  import:           shared
+  main-is:          TestMain.hs
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  ghc-options:      -threaded -rtsopts
+  build-depends:
+    base >= 4.20,
+    lrs,
+    hspec,
+    text
+  other-modules:
+    LRSSpec
