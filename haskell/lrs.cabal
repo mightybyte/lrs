@@ -2,7 +2,7 @@ cabal-version:      3.0
 name:               lrs
 version:            0.1.0.0
 synopsis:           Find longest repeated substrings using suffix arrays
-license:            BSD3
+license:            BSD-3-Clause
 author:             Doug Beardsley
 maintainer:         mightybyte@gmail.com
 copyright:          Doug Beardsley
