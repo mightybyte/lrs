@@ -1,2 +1,2 @@
 pub mod search;
-pub mod suffix_tree;
+pub mod suffix_array;

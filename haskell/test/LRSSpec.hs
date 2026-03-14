@@ -6,7 +6,7 @@ import qualified Data.Text.IO as TIO
 import           Test.Hspec
 ------------------------------------------------------------------------------
 import           LRS.Search (RepeatedSubstring(..), findTopRepeated)
-import           LRS.SuffixTree (buildSuffixTree)
+import           LRS.SuffixArray (buildSuffixArray)
 ------------------------------------------------------------------------------
 
 lrsSpec :: Spec
@@ -14,8 +14,8 @@ lrsSpec = do
   describe "single file with long repeated substring" $ do
     it "finds the repeated DEADBEEF CAFEBABE block" $ do
       txt <- TIO.readFile "test-data/single.txt"
-      let tree = buildSuffixTree txt
-          results = findTopRepeated 3 2 tree
+      let sa = buildSuffixArray txt
+          results = findTopRepeated 3 2 sa
       case results of
         (top:_) -> do
           _rs_substring top `shouldBe` "DEADBEEF CAFEBABE 0123456789 "
@@ -26,8 +26,8 @@ lrsSpec = do
   describe "file with only short repeated substrings" $ do
     it "finds only 2-character repeats" $ do
       txt <- TIO.readFile "test-data/short.txt"
-      let tree = buildSuffixTree txt
-          results = findTopRepeated 10 2 tree
+      let sa = buildSuffixArray txt
+          results = findTopRepeated 10 2 sa
       results `shouldSatisfy` (not . null)
       results `shouldSatisfy` all (\r -> _rs_length r == 2)
       let subs = map _rs_substring results
@@ -44,8 +44,8 @@ lrsSpec = do
       contents <- mapM TIO.readFile files
       let combined = T.intercalate (T.singleton '\0') contents
                   <> T.singleton '\0'
-          tree = buildSuffixTree combined
-          results = findTopRepeated 3 2 tree
+          sa = buildSuffixArray combined
+          results = findTopRepeated 3 2 sa
       case results of
         (top:_) -> do
           _rs_length top `shouldBe` 67

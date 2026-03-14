@@ -1,6 +1,6 @@
 use clap::Parser;
 use lrs::search::{RepeatedSubstring, find_top_repeated};
-use lrs::suffix_tree::{build_suffix_tree, hash_content, load_cache};
+use lrs::suffix_array::{build_suffix_array, hash_content, load_cache, save_cache};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -25,7 +25,7 @@ struct Opts {
     #[arg(long = "min-length", default_value_t = 2)]
     min_length: usize,
 
-    /// Cache the suffix tree to FILE for faster subsequent runs
+    /// Cache the suffix array to FILE for faster subsequent runs
     #[arg(long)]
     cache: Option<PathBuf>,
 
@@ -45,10 +45,10 @@ fn main() {
 
     let combined = read_and_combine(&files);
 
-    let tree = match &opts.cache {
+    let sa = match &opts.cache {
         Some(cache_path) if cache_path.exists() => match load_cache(cache_path, &combined) {
             Some(t) => {
-                println!("Loading cached suffix tree from {}", cache_path.display());
+                println!("Loading cached suffix array from {}", cache_path.display());
                 t
             }
             None => {
@@ -59,7 +59,7 @@ fn main() {
         cache_opt => build_and_cache(&combined, cache_opt.as_deref()),
     };
 
-    let results = find_top_repeated(opts.top_n, opts.min_length, &tree);
+    let results = find_top_repeated(opts.top_n, opts.min_length, &sa);
 
     println!("Analyzed {} file(s)", files.len());
     println!();
@@ -84,17 +84,17 @@ fn read_and_combine(files: &[PathBuf]) -> String {
     parts.join("\0") + "\0"
 }
 
-fn build_and_cache(combined: &str, cache_path: Option<&Path>) -> lrs::suffix_tree::SuffixTree {
+fn build_and_cache(combined: &str, cache_path: Option<&Path>) -> lrs::suffix_array::SuffixArray {
     let content_hash = hash_content(combined);
-    let tree = build_suffix_tree(combined);
+    let sa = build_suffix_array(combined);
     if let Some(path) = cache_path {
-        if let Err(e) = lrs::suffix_tree::save_cache_from_tree(path, content_hash, &tree.tree) {
+        if let Err(e) = save_cache(path, content_hash, &sa) {
             eprintln!("Warning: failed to save cache: {e}");
         } else {
-            println!("Saved suffix tree cache to {}", path.display());
+            println!("Saved suffix array cache to {}", path.display());
         }
     }
-    tree
+    sa
 }
 
 fn print_results(results: &[RepeatedSubstring]) {

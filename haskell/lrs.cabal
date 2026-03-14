@@ -1,7 +1,7 @@
 cabal-version:      3.0
 name:               lrs
 version:            0.1.0.0
-synopsis:           Find longest repeated substrings using suffix trees
+synopsis:           Find longest repeated substrings using suffix arrays
 license:            NONE
 author:             EquiTek
 build-type:         Simple
@@ -19,7 +19,7 @@ library
   hs-source-dirs:   src
   exposed-modules:
     AppMain
-    LRS.SuffixTree
+    LRS.SuffixArray
     LRS.Search
   build-depends:
     base >= 4.20,
@@ -31,7 +31,8 @@ library
     containers,
     directory,
     filepath,
-    optparse-applicative
+    optparse-applicative,
+    vector
 
 executable lrs
   import:           shared

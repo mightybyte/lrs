@@ -1,14 +1,10 @@
 use std::fs;
 
-// We need to access the library functions, but since this is a binary crate,
-// we'll test via the binary. However, for unit-style tests let's restructure.
-// Actually, let's just do integration tests that invoke the binary.
-
 #[test]
 fn single_file_long_repeated_substring() {
     let txt = fs::read_to_string("test-data/single.txt").unwrap();
-    let tree = lrs::suffix_tree::build_suffix_tree(&txt);
-    let results = lrs::search::find_top_repeated(3, 2, &tree);
+    let sa = lrs::suffix_array::build_suffix_array(&txt);
+    let results = lrs::search::find_top_repeated(3, 2, &sa);
 
     assert!(!results.is_empty(), "expected at least one result");
     let top = &results[0];
@@ -20,8 +16,8 @@ fn single_file_long_repeated_substring() {
 #[test]
 fn short_repeated_substrings_only() {
     let txt = fs::read_to_string("test-data/short.txt").unwrap();
-    let tree = lrs::suffix_tree::build_suffix_tree(&txt);
-    let results = lrs::search::find_top_repeated(10, 2, &tree);
+    let sa = lrs::suffix_array::build_suffix_array(&txt);
+    let results = lrs::search::find_top_repeated(10, 2, &sa);
 
     assert!(!results.is_empty());
     assert!(
@@ -46,8 +42,8 @@ fn repeated_substring_across_directory_hierarchy() {
         .map(|f| fs::read_to_string(f).unwrap())
         .collect();
     let combined = contents.join("\0") + "\0";
-    let tree = lrs::suffix_tree::build_suffix_tree(&combined);
-    let results = lrs::search::find_top_repeated(3, 2, &tree);
+    let sa = lrs::suffix_array::build_suffix_array(&combined);
+    let results = lrs::search::find_top_repeated(3, 2, &sa);
 
     assert!(!results.is_empty(), "expected at least one result");
     let top = &results[0];

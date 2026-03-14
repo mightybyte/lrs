@@ -1,0 +1,9 @@
+begin long block: alpha beta gamma delta epsilon
+end long block
+begin long block: alpha beta gamma delta epsilon
+end long block
+word alpha appears here
+word alpha appears there
+word alpha appears everywhere
+word alpha appears again
+word alpha appears once more

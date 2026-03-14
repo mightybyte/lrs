@@ -10,7 +10,7 @@ import System.Exit (exitFailure)
 import System.FilePath ((</>))
 
 import LRS.Search (RepeatedSubstring(..), findTopRepeated)
-import LRS.SuffixTree (SuffixTree(..), buildSuffixTree, hashContent, loadCache, saveCache)
+import LRS.SuffixArray (SuffixArray, buildSuffixArray, hashContent, loadCache, saveCache)
 
 data Opts = Opts
   { _opts_topN      :: Int
@@ -40,7 +40,7 @@ optsParser = Opts
   <*> optional (strOption
       ( long "cache"
      <> metavar "FILE"
-     <> help "Cache the suffix tree to FILE for faster subsequent runs" ))
+     <> help "Cache the suffix array to FILE for faster subsequent runs" ))
   <*> some (argument str (metavar "PATH..."))
 
 appMain :: IO ()
@@ -57,7 +57,7 @@ appMain = do
 
   combined <- readAndCombine files
 
-  tree <- case _opts_cache opts of
+  sa <- case _opts_cache opts of
     Just cachePath -> do
       cacheExists <- doesFileExist cachePath
       if cacheExists
@@ -65,15 +65,15 @@ appMain = do
           mCached <- loadCache cachePath combined
           case mCached of
             Just t -> do
-              putStrLn $ "Loading cached suffix tree from " ++ cachePath
+              putStrLn $ "Loading cached suffix array from " ++ cachePath
               return t
             Nothing -> do
               putStrLn "Cache stale or corrupt, rebuilding..."
               buildAndCache combined cachePath
         else buildAndCache combined cachePath
-    Nothing -> return $! buildSuffixTree combined
+    Nothing -> return $! buildSuffixArray combined
 
-  let results = findTopRepeated (_opts_topN opts) (_opts_minLength opts) tree
+  let results = findTopRepeated (_opts_topN opts) (_opts_minLength opts) sa
 
   putStrLn $ "Analyzed " ++ show (length files) ++ " file(s)"
   putStrLn ""
@@ -87,13 +87,13 @@ readAndCombine files = do
   contents <- forM files $ \f -> TIO.readFile f
   return $ T.intercalate (T.singleton '\0') contents <> T.singleton '\0'
 
-buildAndCache :: T.Text -> FilePath -> IO SuffixTree
+buildAndCache :: T.Text -> FilePath -> IO SuffixArray
 buildAndCache combined cachePath = do
   let contentHash = hashContent combined
-      !t@(SuffixTree _ stree) = buildSuffixTree combined
-  saveCache cachePath contentHash stree
-  putStrLn $ "Saved suffix tree cache to " ++ cachePath
-  return t
+      !sa = buildSuffixArray combined
+  saveCache cachePath contentHash sa
+  putStrLn $ "Saved suffix array cache to " ++ cachePath
+  return sa
 
 printResults :: [RepeatedSubstring] -> IO ()
 printResults results = do
