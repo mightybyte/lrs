@@ -1,0 +1,7 @@
+*.swp
+*.o
+dist
+dist-newstyle
+result
+target
+*.cache
