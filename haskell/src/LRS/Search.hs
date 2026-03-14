@@ -3,8 +3,9 @@ module LRS.Search
   , findTopRepeated
   ) where
 
-import Data.List (sortBy)
+import Data.List (mapAccumR, sortBy)
 import Data.Ord (Down(..))
+import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as V
 
@@ -29,15 +30,16 @@ data Candidate = Candidate
 -- in the conceptual suffix tree).
 findTopRepeated :: Int -> Int -> SuffixArray -> [RepeatedSubstring]
 findTopRepeated topN minLen (SuffixArray txt sa lcp) =
-    take topN
-  $ dedup
-  $ sortBy (\a b -> compare (Down (_rs_length a)) (Down (_rs_length b)))
-  $ filter (\rs -> not (T.any (== '\0') (_rs_substring rs)))
-  $ map (materialise txt sa)
-  $ take (topN * 4)
-  $ prededupCandidates sa
-  $ sortBy (\a b -> compare (Down (_ca_depth a)) (Down (_ca_depth b)))
-  $ collectLcpIntervals sa lcp minLen
+    let distToSentinel = buildDistToSentinel txt
+    in  take topN
+      $ dedup
+      $ sortBy (\a b -> compare (Down (_rs_length a)) (Down (_rs_length b)))
+      $ map (materialise txt sa)
+      $ take (topN * 50)
+      $ collapseTowers sa
+      $ sortBy (\a b -> compare (Down (_ca_depth a)) (Down (_ca_depth b)))
+      $ filter (noSentinel sa distToSentinel)
+      $ collectLcpIntervals sa lcp minLen
 
 -- | Materialise a candidate into a full result.
 materialise :: T.Text -> V.Vector Int -> Candidate -> RepeatedSubstring
@@ -46,28 +48,38 @@ materialise txt sa (Candidate depth startRank count) =
       substr = T.take depth (T.drop suffixIdx txt)
   in RepeatedSubstring substr depth count
 
--- | Pre-dedup candidates using suffix positions to collapse "towers" of
--- near-identical candidates from the same repeated block.
---
--- A repeated block of length L generates ~L candidates at depths L, L-1, ...
--- all from overlapping text regions.  We detect this cheaply: a candidate is
--- dominated if an already-accepted candidate has a greater depth, at least as
--- many occurrences, and its text region covers the current candidate's
--- representative suffix position.
---
--- Input must be sorted by depth descending.
-prededupCandidates :: V.Vector Int -> [Candidate] -> [Candidate]
-prededupCandidates sa = go []
+-- | Precompute distance from each position to the next sentinel character.
+-- distToSentinel[i] = number of chars from position i to the next '\0'.
+buildDistToSentinel :: T.Text -> V.Vector Int
+buildDistToSentinel txt = V.fromList dists
   where
-    -- accepted entries: (textPosition, depth, count)
+    (_, dists) = mapAccumR step 0 (T.unpack txt)
+    step d c = let d' = if c == '\0' then 0 else d
+               in (d' + 1, d')
+
+-- | Check whether a candidate's representative suffix crosses a sentinel.
+noSentinel :: V.Vector Int -> V.Vector Int -> Candidate -> Bool
+noSentinel sa distToSentinel c =
+    let pos = sa V.! _ca_startRank c
+    in  distToSentinel V.! pos >= _ca_depth c
+
+-- | Collapse towers of candidates from the same repeated block.
+-- A block of length L generates candidates at depths L, L-1, ..., where
+-- each step shifts the representative suffix position right by 1 while
+-- reducing depth by 1, keeping the end position (pos + depth) constant.
+-- Keying on (end_position, count) collapses these towers in O(n).
+-- Since input is sorted by depth descending, the first candidate seen
+-- for each key is the longest.
+collapseTowers :: V.Vector Int -> [Candidate] -> [Candidate]
+collapseTowers sa = go HS.empty
+  where
     go _ [] = []
-    go accepted (c:cs)
-      | dominated = go accepted cs
-      | otherwise = c : go ((pos, _ca_depth c, _ca_count c) : accepted) cs
+    go seen (c:cs)
+      | HS.member key seen = go seen cs
+      | otherwise          = c : go (HS.insert key seen) cs
       where
         pos = sa V.! _ca_startRank c
-        dominated = any (\(aPos, aDepth, aCount) ->
-          pos >= aPos && pos < aPos + aDepth && _ca_count c <= aCount) accepted
+        key = (pos + _ca_depth c, _ca_count c)
 
 -- | Stack-based O(n) enumeration of all LCP intervals.
 -- Each interval corresponds to an internal node in the conceptual suffix tree
@@ -84,7 +96,7 @@ collectLcpIntervals _sa lcp minLen = go 1 [] []
       | i > n = flush stack acc
       | otherwise =
           let curLcp = if i < n then lcp V.! i else 0
-              (stack', leftBound, acc') = popAbove stack curLcp i acc
+              (stack', leftBound, acc') = popAbove stack curLcp (i - 1) i acc
               stack'' = if curLcp > 0
                         then pushIfNeeded stack' curLcp leftBound
                         else stack'
@@ -92,16 +104,16 @@ collectLcpIntervals _sa lcp minLen = go 1 [] []
 
     -- Pop all stack entries with depth > curLcp, emitting candidates.
     -- Returns (remaining_stack, last_popped_left_bound, accumulated_candidates).
-    popAbove :: [(Int, Int)] -> Int -> Int -> [Candidate] -> ([(Int, Int)], Int, [Candidate])
-    popAbove [] _curLcp i acc = ([], i - 1, acc)
-    popAbove stk@((depth, lb):rest) curLcp i acc
+    popAbove :: [(Int, Int)] -> Int -> Int -> Int -> [Candidate] -> ([(Int, Int)], Int, [Candidate])
+    popAbove [] _curLcp leftBound _i acc = ([], leftBound, acc)
+    popAbove stk@((depth, lb):rest) curLcp leftBound i acc
       | depth > curLcp =
           let count = i - lb
               acc' = if depth >= minLen && count >= 2
                      then Candidate depth lb count : acc
                      else acc
-          in popAbove rest curLcp i acc'
-      | otherwise = (stk, i - 1, acc)
+          in popAbove rest curLcp lb i acc'
+      | otherwise = (stk, leftBound, acc)
 
     -- Push curLcp if it's greater than the top of the stack.
     pushIfNeeded :: [(Int, Int)] -> Int -> Int -> [(Int, Int)]

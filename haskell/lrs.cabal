@@ -29,11 +29,13 @@ library
     binary,
     bytestring,
     cryptohash-sha256,
+    hashable,
     text,
     containers,
     directory,
     filepath,
     optparse-applicative,
+    unordered-containers,
     vector
 
 executable lrs
