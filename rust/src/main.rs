@@ -25,6 +25,10 @@ struct Opts {
     #[arg(long = "min-length", default_value_t = 2)]
     min_length: usize,
 
+    /// Collapse all whitespace sequences into a single space
+    #[arg(long = "collapse-whitespace")]
+    collapse_whitespace: bool,
+
     /// Cache the suffix array to FILE for faster subsequent runs
     #[arg(long)]
     cache: Option<PathBuf>,
@@ -43,7 +47,10 @@ fn main() {
         process::exit(1);
     }
 
-    let combined = read_and_combine(&files);
+    let mut combined = read_and_combine(&files);
+    if opts.collapse_whitespace {
+        combined = collapse_whitespace(&combined);
+    }
 
     let sa = match &opts.cache {
         Some(cache_path) if cache_path.exists() => match load_cache(cache_path, &combined) {
@@ -59,7 +66,10 @@ fn main() {
         cache_opt => build_and_cache(&combined, cache_opt.as_deref()),
     };
 
-    let results = find_top_repeated(opts.top_n, opts.min_length, &sa);
+    let mut results = find_top_repeated(opts.top_n, opts.min_length, &sa);
+    if opts.collapse_whitespace {
+        trim_results(&mut results);
+    }
 
     println!("Analyzed {} file(s)", files.len());
     println!();
@@ -127,6 +137,37 @@ fn format_substring(max_len: usize, s: &str) -> String {
     } else {
         format!("\"{escaped}\"")
     }
+}
+
+fn trim_results(results: &mut Vec<RepeatedSubstring>) {
+    for r in results.iter_mut() {
+        r.substring = r.substring.trim().to_string();
+        r.length = r.substring.len();
+    }
+    // Trimming may create duplicates; keep the highest-count version of each
+    let mut seen = std::collections::HashSet::new();
+    results.retain(|r| seen.insert(r.substring.clone()));
+}
+
+fn collapse_whitespace(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_ws = false;
+    for c in s.chars() {
+        if c == '\0' {
+            // Preserve null sentinels
+            in_ws = false;
+            result.push(c);
+        } else if c.is_whitespace() {
+            if !in_ws {
+                result.push(' ');
+                in_ws = true;
+            }
+        } else {
+            in_ws = false;
+            result.push(c);
+        }
+    }
+    result
 }
 
 fn resolve_files(recursive: bool, paths: &[PathBuf]) -> Vec<PathBuf> {

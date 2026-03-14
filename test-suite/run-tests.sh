@@ -119,7 +119,14 @@ check_output "short high-count pattern survives dedup" 'word alpha appears'
 check_line_count "at least 2 distinct results" 2
 
 # ============================================================
-echo "=== Test 8: -n limits results ==="
+echo "=== Test 8: --collapse-whitespace normalizes whitespace ==="
+OUTPUT=$("$LRS" "$DATA/whitespace.txt" --collapse-whitespace -n 5 2>&1)
+check_output "finds 'hello world foo bar' after collapsing" 'hello world foo bar'
+# Without collapse, "hello   world   foo   bar" != "hello world foo bar"
+# With collapse, they become identical, forming a repeated substring
+
+# ============================================================
+echo "=== Test 9: -n limits results ==="
 OUTPUT=$("$LRS" "$DATA/multi-repeat.txt" -n 1 2>&1)
 check_line_count "exactly 1 result with -n 1" 1
 # Should not have more than 1

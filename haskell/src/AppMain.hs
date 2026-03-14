@@ -13,11 +13,12 @@ import LRS.Search (RepeatedSubstring(..), findTopRepeated)
 import LRS.SuffixArray (SuffixArray, buildSuffixArray, hashContent, loadCache, saveCache)
 
 data Opts = Opts
-  { _opts_topN      :: Int
-  , _opts_recursive :: Bool
-  , _opts_minLength :: Int
-  , _opts_cache     :: Maybe FilePath
-  , _opts_paths     :: [FilePath]
+  { _opts_topN               :: Int
+  , _opts_recursive          :: Bool
+  , _opts_minLength          :: Int
+  , _opts_collapseWhitespace :: Bool
+  , _opts_cache              :: Maybe FilePath
+  , _opts_paths              :: [FilePath]
   } deriving (Show)
 
 optsParser :: Parser Opts
@@ -37,6 +38,9 @@ optsParser = Opts
      <> showDefault
      <> metavar "N"
      <> help "Minimum substring length to report" )
+  <*> switch
+      ( long "collapse-whitespace"
+     <> help "Collapse all whitespace sequences into a single space" )
   <*> optional (strOption
       ( long "cache"
      <> metavar "FILE"
@@ -55,7 +59,10 @@ appMain = do
     putStrLn "Error: no files found"
     exitFailure
 
-  combined <- readAndCombine files
+  rawCombined <- readAndCombine files
+  let combined = if _opts_collapseWhitespace opts
+                 then collapseWhitespace rawCombined
+                 else rawCombined
 
   sa <- case _opts_cache opts of
     Just cachePath -> do
@@ -73,7 +80,10 @@ appMain = do
         else buildAndCache combined cachePath
     Nothing -> return $! buildSuffixArray combined
 
-  let results = findTopRepeated (_opts_topN opts) (_opts_minLength opts) sa
+  let results0 = findTopRepeated (_opts_topN opts) (_opts_minLength opts) sa
+      results = if _opts_collapseWhitespace opts
+                then trimResults results0
+                else results0
 
   putStrLn $ "Analyzed " ++ show (length files) ++ " file(s)"
   putStrLn ""
@@ -86,6 +96,30 @@ readAndCombine :: [FilePath] -> IO T.Text
 readAndCombine files = do
   contents <- forM files $ \f -> TIO.readFile f
   return $ T.intercalate (T.singleton '\0') contents <> T.singleton '\0'
+
+trimResults :: [RepeatedSubstring] -> [RepeatedSubstring]
+trimResults = dedupBySubstring . map trimOne
+  where
+    trimOne (RepeatedSubstring s _ c) =
+      let s' = T.strip s
+      in  RepeatedSubstring s' (T.length s') c
+    dedupBySubstring = go []
+      where
+        go _ [] = []
+        go seen (r:rs)
+          | _rs_substring r `elem` seen = go seen rs
+          | otherwise = r : go (_rs_substring r : seen) rs
+
+collapseWhitespace :: T.Text -> T.Text
+collapseWhitespace = T.pack . go False . T.unpack
+  where
+    go _ [] = []
+    go _ ('\0':cs) = '\0' : go False cs
+    go inWs (c:cs)
+      | isWs c    = if inWs then go True cs else ' ' : go True cs
+      | otherwise  = c : go False cs
+    isWs c = c == ' ' || c == '\t' || c == '\n' || c == '\r'
+           || c == '\f' || c == '\v'
 
 buildAndCache :: T.Text -> FilePath -> IO SuffixArray
 buildAndCache combined cachePath = do
