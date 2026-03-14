@@ -6,6 +6,7 @@ pub struct RepeatedSubstring {
     pub substring: String,
     pub length: usize,
     pub count: usize,
+    pub position: usize,
 }
 
 /// A lightweight candidate: just integers, no string allocation yet.
@@ -75,6 +76,7 @@ pub fn find_top_repeated(top_n: usize, min_len: usize, sa: &SuffixArray) -> Vec<
             RepeatedSubstring {
                 length: c.depth,
                 count: c.count,
+                position: start,
                 substring,
             }
         })

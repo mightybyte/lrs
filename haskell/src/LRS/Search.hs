@@ -15,6 +15,7 @@ data RepeatedSubstring = RepeatedSubstring
   { _rs_substring :: !T.Text
   , _rs_length    :: !Int
   , _rs_count     :: !Int   -- ^ Number of occurrences
+  , _rs_position  :: !Int   -- ^ Character offset in combined text
   } deriving (Show)
 
 -- | A lightweight candidate: just integers, no string allocation yet.
@@ -46,7 +47,7 @@ materialise :: T.Text -> V.Vector Int -> Candidate -> RepeatedSubstring
 materialise txt sa (Candidate depth startRank count) =
   let suffixIdx = sa V.! startRank
       substr = T.take depth (T.drop suffixIdx txt)
-  in RepeatedSubstring substr depth count
+  in RepeatedSubstring substr depth count suffixIdx
 
 -- | Precompute distance from each position to the next sentinel character.
 -- distToSentinel[i] = number of chars from position i to the next '\0'.

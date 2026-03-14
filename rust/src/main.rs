@@ -47,10 +47,15 @@ fn main() {
         process::exit(1);
     }
 
-    let mut combined = read_and_combine(&files);
-    if opts.collapse_whitespace {
-        combined = collapse_whitespace(&combined);
-    }
+    let raw_combined = read_and_combine(&files);
+    let file_index = build_file_index(&files, &raw_combined);
+
+    let (combined, pos_map) = if opts.collapse_whitespace {
+        let (collapsed, map) = collapse_whitespace(&raw_combined);
+        (collapsed, Some(map))
+    } else {
+        (raw_combined, None)
+    };
 
     let sa = match &opts.cache {
         Some(cache_path) if cache_path.exists() => match load_cache(cache_path, &combined) {
@@ -71,13 +76,22 @@ fn main() {
         trim_results(&mut results);
     }
 
+    // Map positions back to original text when whitespace was collapsed
+    if let Some(ref map) = pos_map {
+        for r in results.iter_mut() {
+            if r.position < map.len() {
+                r.position = map[r.position];
+            }
+        }
+    }
+
     println!("Analyzed {} file(s)", files.len());
     println!();
 
     if results.is_empty() {
         println!("No repeated substrings found.");
     } else {
-        print_results(&results);
+        print_results(&results, &file_index);
     }
 }
 
@@ -107,16 +121,79 @@ fn build_and_cache(combined: &str, cache_path: Option<&Path>) -> lrs::suffix_arr
     sa
 }
 
-fn print_results(results: &[RepeatedSubstring]) {
-    println!("{:<5}{:<9}{:<9}Substring", "#", "Length", "Count");
-    println!("{}", "-".repeat(72));
-    for (i, rs) in results.iter().enumerate() {
+/// An entry in the file index mapping character offsets to file/line info.
+struct FileEntry {
+    start: usize,
+    path: PathBuf,
+    line_offsets: Vec<usize>,
+}
+
+/// Build an index mapping character positions in the combined text back to
+/// file paths and line numbers.
+fn build_file_index(files: &[PathBuf], combined: &str) -> Vec<FileEntry> {
+    let mut entries = Vec::new();
+    let mut offset = 0;
+    for file_text in combined.split('\0') {
+        if file_text.is_empty() {
+            offset += 1; // skip the \0
+            continue;
+        }
+        if let Some(path) = files.get(entries.len()) {
+            let mut line_offsets = vec![0usize];
+            for (i, c) in file_text.chars().enumerate() {
+                if c == '\n' {
+                    line_offsets.push(i + 1);
+                }
+            }
+            entries.push(FileEntry {
+                start: offset,
+                path: path.clone(),
+                line_offsets,
+            });
+        }
+        offset += file_text.chars().count() + 1; // +1 for the \0
+    }
+    entries
+}
+
+/// Look up the file path and line number for a character position.
+fn lookup_location(file_index: &[FileEntry], pos: usize) -> (String, usize) {
+    for entry in file_index.iter().rev() {
+        if pos >= entry.start {
+            let local_pos = pos - entry.start;
+            let line = match entry.line_offsets.binary_search(&local_pos) {
+                Ok(i) => i + 1,
+                Err(i) => i,
+            };
+            return (entry.path.display().to_string(), line);
+        }
+    }
+    ("<unknown>".to_string(), 0)
+}
+
+fn print_results(results: &[RepeatedSubstring], file_index: &[FileEntry]) {
+    let locations: Vec<String> = results
+        .iter()
+        .map(|rs| {
+            let (file, line) = lookup_location(file_index, rs.position);
+            format!("{}:{}", file, line)
+        })
+        .collect();
+    let loc_width = locations.iter().map(|l| l.len()).max().unwrap_or(8).max(8);
+    let total_width = 5 + 9 + 9 + 57 + loc_width;
+    println!(
+        "{:<5}{:<9}{:<9}{:<57}{}",
+        "#", "Length", "Count", "Substring", "Location"
+    );
+    println!("{}", "-".repeat(total_width));
+    for (i, (rs, loc)) in results.iter().zip(locations.iter()).enumerate() {
         println!(
-            "{:<5}{:<9}{:<9}{}",
+            "{:<5}{:<9}{:<9}{:<57}{}",
             i + 1,
             rs.length,
             rs.count,
-            format_substring(50, &rs.substring)
+            format_substring(50, &rs.substring),
+            loc
         );
     }
 }
@@ -149,25 +226,28 @@ fn trim_results(results: &mut Vec<RepeatedSubstring>) {
     results.retain(|r| seen.insert(r.substring.clone()));
 }
 
-fn collapse_whitespace(s: &str) -> String {
+fn collapse_whitespace(s: &str) -> (String, Vec<usize>) {
     let mut result = String::with_capacity(s.len());
+    let mut pos_map = Vec::with_capacity(s.len());
     let mut in_ws = false;
-    for c in s.chars() {
+    for (i, c) in s.chars().enumerate() {
         if c == '\0' {
-            // Preserve null sentinels
             in_ws = false;
             result.push(c);
+            pos_map.push(i);
         } else if c.is_whitespace() {
             if !in_ws {
                 result.push(' ');
+                pos_map.push(i);
                 in_ws = true;
             }
         } else {
             in_ws = false;
             result.push(c);
+            pos_map.push(i);
         }
     }
-    result
+    (result, pos_map)
 }
 
 fn resolve_files(recursive: bool, paths: &[PathBuf]) -> Vec<PathBuf> {

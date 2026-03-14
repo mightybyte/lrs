@@ -60,9 +60,11 @@ appMain = do
     exitFailure
 
   rawCombined <- readAndCombine files
-  let combined = if _opts_collapseWhitespace opts
-                 then collapseWhitespace rawCombined
-                 else rawCombined
+  let fileIndex = buildFileIndex files rawCombined
+      (combined, posMap) = if _opts_collapseWhitespace opts
+                           then let (c, m) = collapseWhitespace rawCombined
+                                in  (c, Just m)
+                           else (rawCombined, Nothing)
 
   sa <- case _opts_cache opts of
     Just cachePath -> do
@@ -81,16 +83,17 @@ appMain = do
     Nothing -> return $! buildSuffixArray combined
 
   let results0 = findTopRepeated (_opts_topN opts) (_opts_minLength opts) sa
-      results = if _opts_collapseWhitespace opts
-                then trimResults results0
-                else results0
+      results1 = if _opts_collapseWhitespace opts
+                 then trimResults results0
+                 else results0
+      results = mapPositions posMap results1
 
   putStrLn $ "Analyzed " ++ show (length files) ++ " file(s)"
   putStrLn ""
 
   if null results
     then putStrLn "No repeated substrings found."
-    else printResults results
+    else printResults fileIndex results
 
 readAndCombine :: [FilePath] -> IO T.Text
 readAndCombine files = do
@@ -100,9 +103,9 @@ readAndCombine files = do
 trimResults :: [RepeatedSubstring] -> [RepeatedSubstring]
 trimResults = dedupBySubstring . map trimOne
   where
-    trimOne (RepeatedSubstring s _ c) =
+    trimOne (RepeatedSubstring s _ c p) =
       let s' = T.strip s
-      in  RepeatedSubstring s' (T.length s') c
+      in  RepeatedSubstring s' (T.length s') c p
     dedupBySubstring = go []
       where
         go _ [] = []
@@ -110,16 +113,55 @@ trimResults = dedupBySubstring . map trimOne
           | _rs_substring r `elem` seen = go seen rs
           | otherwise = r : go (_rs_substring r : seen) rs
 
-collapseWhitespace :: T.Text -> T.Text
-collapseWhitespace = T.pack . go False . T.unpack
+-- | Map result positions back to original text positions using a position map.
+mapPositions :: Maybe [Int] -> [RepeatedSubstring] -> [RepeatedSubstring]
+mapPositions Nothing rs = rs
+mapPositions (Just pm) rs = map mapOne rs
   where
-    go _ [] = []
-    go _ ('\0':cs) = '\0' : go False cs
-    go inWs (c:cs)
-      | isWs c    = if inWs then go True cs else ' ' : go True cs
-      | otherwise  = c : go False cs
+    mapOne r
+      | _rs_position r < length pm = r { _rs_position = pm !! _rs_position r }
+      | otherwise = r
+
+collapseWhitespace :: T.Text -> (T.Text, [Int])
+collapseWhitespace txt = let (cs, ps) = unzip (go False 0 (T.unpack txt))
+                         in  (T.pack cs, ps)
+  where
+    go _ _ [] = []
+    go _ i ('\0':rest) = ('\0', i) : go False (i+1) rest
+    go inWs i (c:rest)
+      | isWs c    = if inWs then go True (i+1) rest else (' ', i) : go True (i+1) rest
+      | otherwise  = (c, i) : go False (i+1) rest
     isWs c = c == ' ' || c == '\t' || c == '\n' || c == '\r'
            || c == '\f' || c == '\v'
+
+-- | An entry mapping a character offset range to a file path and its line offsets.
+data FileEntry = FileEntry
+  { _fe_start       :: !Int
+  , _fe_path        :: !FilePath
+  , _fe_lineOffsets :: ![Int]
+  }
+
+-- | Build an index mapping character positions in the combined text back to
+-- file paths and line numbers.
+buildFileIndex :: [FilePath] -> T.Text -> [FileEntry]
+buildFileIndex files combined = go 0 files (T.splitOn (T.singleton '\0') combined)
+  where
+    go _ _ [] = []
+    go _ [] _ = []
+    go offset (f:fs) (seg:segs)
+      | T.null seg = go (offset + 1) (f:fs) segs
+      | otherwise  =
+          let lineOffs = 0 : [ i + 1 | (i, c) <- zip [0..] (T.unpack seg), c == '\n' ]
+          in  FileEntry offset f lineOffs : go (offset + T.length seg + 1) fs segs
+
+-- | Look up the file path and line number for a character position.
+lookupLocation :: [FileEntry] -> Int -> (FilePath, Int)
+lookupLocation entries pos = case filter (\e -> _fe_start e <= pos) (reverse entries) of
+    (e:_) ->
+      let localPos = pos - _fe_start e
+          line = length (takeWhile (<= localPos) (_fe_lineOffsets e))
+      in  (_fe_path e, line)
+    [] -> ("<unknown>", 0)
 
 buildAndCache :: T.Text -> FilePath -> IO SuffixArray
 buildAndCache combined cachePath = do
@@ -129,17 +171,24 @@ buildAndCache combined cachePath = do
   putStrLn $ "Saved suffix array cache to " ++ cachePath
   return sa
 
-printResults :: [RepeatedSubstring] -> IO ()
-printResults results = do
-  putStrLn $ padR 5 "#" ++ padR 9 "Length" ++ padR 9 "Count" ++ "Substring"
-  putStrLn $ replicate 72 '-'
-  mapM_ printOne (zip [1::Int ..] results)
+printResults :: [FileEntry] -> [RepeatedSubstring] -> IO ()
+printResults fileIndex results = do
+  let locations = map (\rs -> let (f, l) = lookupLocation fileIndex (_rs_position rs)
+                              in  f ++ ":" ++ show l) results
+      locWidth = max 8 (if null locations then 0 else maximum (map length locations))
+      totalWidth = 5 + 9 + 9 + 57 + locWidth
+  putStrLn $ padR 5 "#" ++ padR 9 "Length" ++ padR 9 "Count" ++ padR 57 "Substring" ++ "Location"
+  putStrLn $ replicate totalWidth '-'
+  mapM_ printOne (zip3' [1::Int ..] results locations)
   where
-    printOne (i, rs) =
+    zip3' (a:as') (b:bs) (c:cs) = (a,b,c) : zip3' as' bs cs
+    zip3' _ _ _ = []
+    printOne (i, rs, loc) =
       putStrLn $ padR 5 (show i)
               ++ padR 9 (show (_rs_length rs))
               ++ padR 9 (show (_rs_count rs))
-              ++ formatSubstring 50 (_rs_substring rs)
+              ++ padR 57 (formatSubstring 50 (_rs_substring rs))
+              ++ loc
 
 padR :: Int -> String -> String
 padR n s = s ++ replicate (max 0 (n - length s)) ' '
